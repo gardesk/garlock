@@ -155,6 +155,16 @@ show_failed_attempts = true
 
 # Show current time on lock screen
 show_time = false
+
+# Time format (strftime patterns)
+# Common formats:
+#   "%H:%M"     - 24-hour (14:30)
+#   "%H:%M:%S"  - 24-hour with seconds (14:30:45)
+#   "%I:%M %p"  - 12-hour with AM/PM (02:30 PM)
+#   "%I:%M:%S %p" - 12-hour with seconds (02:30:45 PM)
+#   "%l:%M %p"  - 12-hour no leading zero (2:30 PM)
+#   "%a %H:%M"  - Day + time (Mon 14:30)
+#   "%A, %B %d" - Full date (Monday, January 16)
 time_format = "%H:%M"
 
 [font]
