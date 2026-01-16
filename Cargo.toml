@@ -54,3 +54,4 @@ xkbcommon = "0.8"
 # Utilities
 dirs = "5.0"
 users = "0.11"
+chrono = "0.4"
