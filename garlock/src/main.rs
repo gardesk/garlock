@@ -4,7 +4,7 @@
 //! blur effects, and PAM authentication.
 
 use anyhow::Result;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 use x11rb::connection::Connection;
@@ -13,6 +13,7 @@ mod auth;
 mod background;
 mod config;
 mod error;
+mod ipc;
 mod keyboard;
 mod overlay;
 mod password;
@@ -36,21 +37,31 @@ use x11::LockerWindow;
 #[derive(Parser, Debug)]
 #[command(name = "garlock", version, about, long_about = None)]
 struct Args {
-    /// Run in daemon mode (listen for IPC lock commands)
-    #[arg(long)]
-    daemon: bool,
-
     /// Config file path (default: ~/.config/garlock/config.toml)
-    #[arg(long, short)]
+    #[arg(long, short, global = true)]
     config: Option<PathBuf>,
 
     /// Enable debug logging
-    #[arg(long, short)]
+    #[arg(long, short, global = true)]
     debug: bool,
 
-    /// Lock immediately without daemon mode
-    #[arg(long)]
-    lock: bool,
+    #[command(subcommand)]
+    command: Option<Commands>,
+}
+
+#[derive(Subcommand, Debug)]
+enum Commands {
+    /// Run in daemon mode (listen for IPC lock commands)
+    Daemon,
+
+    /// Lock the screen (sends command to daemon if running, otherwise locks directly)
+    Lock,
+
+    /// Query the current lock state (requires daemon)
+    Status,
+
+    /// Shutdown the daemon
+    Shutdown,
 }
 
 fn main() -> Result<()> {
@@ -73,19 +84,120 @@ fn main() -> Result<()> {
     let config = Config::load(args.config.as_deref())?;
     tracing::debug!(?config, "Configuration loaded");
 
-    if args.daemon {
-        tracing::info!("Running in daemon mode");
-        run_daemon(config)
-    } else {
-        tracing::info!("Locking screen");
-        run_lock(config)
+    match args.command {
+        Some(Commands::Daemon) => {
+            tracing::info!("Running in daemon mode");
+            run_daemon(config)
+        }
+        Some(Commands::Lock) => {
+            // Try to send to daemon first, fall back to direct lock
+            if let Ok(mut client) = ipc::IpcClient::connect() {
+                tracing::info!("Sending lock command to daemon");
+                match client.lock() {
+                    Ok(response) => {
+                        tracing::info!(?response, "Daemon response");
+                        Ok(())
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to send lock command: {}", e);
+                        tracing::info!("Falling back to direct lock");
+                        run_lock(config)
+                    }
+                }
+            } else {
+                tracing::info!("No daemon running, locking directly");
+                run_lock(config)
+            }
+        }
+        Some(Commands::Status) => {
+            let mut client = ipc::IpcClient::connect()?;
+            let response = client.query_state()?;
+            println!("{}", serde_json::to_string_pretty(&response)?);
+            Ok(())
+        }
+        Some(Commands::Shutdown) => {
+            let mut client = ipc::IpcClient::connect()?;
+            let response = client.shutdown()?;
+            println!("{}", serde_json::to_string_pretty(&response)?);
+            Ok(())
+        }
+        None => {
+            // Default: lock directly (backwards compatible)
+            tracing::info!("Locking screen");
+            run_lock(config)
+        }
     }
 }
 
 /// Run in daemon mode, listening for IPC lock commands
-fn run_daemon(_config: Config) -> Result<()> {
-    // TODO: Sprint 7 - IPC server implementation
-    tracing::warn!("Daemon mode not yet implemented");
+fn run_daemon(config: Config) -> Result<()> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    let server = ipc::IpcServer::new()?;
+    let running = Arc::new(AtomicBool::new(true));
+    let is_locked = Arc::new(AtomicBool::new(false));
+
+    // Handle SIGTERM/SIGINT for graceful shutdown
+    let running_clone = running.clone();
+    ctrlc::set_handler(move || {
+        tracing::info!("Received shutdown signal");
+        running_clone.store(false, Ordering::SeqCst);
+    })
+    .ok();
+
+    tracing::info!(socket = ?server.socket_path(), "Daemon ready, waiting for commands");
+
+    while running.load(Ordering::SeqCst) {
+        if let Some((cmd, mut client)) = server.poll() {
+            let response = match cmd {
+                ipc::Command::Lock => {
+                    if is_locked.load(Ordering::SeqCst) {
+                        ipc::Response::error("Screen is already locked")
+                    } else {
+                        tracing::info!("Lock command received");
+                        is_locked.store(true, Ordering::SeqCst);
+
+                        // Send response before blocking on lock
+                        if let Err(e) = client.respond(ipc::Response::ok_with_message("Locking screen")) {
+                            tracing::warn!("Failed to send response: {}", e);
+                        }
+
+                        // Run the lock screen (this blocks until unlocked)
+                        match run_lock(config.clone()) {
+                            Ok(()) => {
+                                tracing::info!("Screen unlocked");
+                            }
+                            Err(e) => {
+                                tracing::error!("Lock failed: {}", e);
+                            }
+                        }
+
+                        is_locked.store(false, Ordering::SeqCst);
+                        continue; // Response already sent
+                    }
+                }
+                ipc::Command::QueryState => {
+                    let locked = is_locked.load(Ordering::SeqCst);
+                    ipc::Response::state(locked, None, None)
+                }
+                ipc::Command::Shutdown => {
+                    tracing::info!("Shutdown command received");
+                    running.store(false, Ordering::SeqCst);
+                    ipc::Response::ok_with_message("Shutting down")
+                }
+            };
+
+            if let Err(e) = client.respond(response) {
+                tracing::warn!("Failed to send response: {}", e);
+            }
+        }
+
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    tracing::info!("Daemon shutting down");
+    server.cleanup();
     Ok(())
 }
 
