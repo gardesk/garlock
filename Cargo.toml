@@ -1,0 +1,56 @@
+[workspace]
+members = ["garlock"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["mfwolffe"]
+license = "MIT"
+description = "Screen locker for the gar desktop suite"
+repository = "https://github.com/mfwolffe/gardesk"
+
+[workspace.dependencies]
+# X11
+x11rb = { version = "0.13", features = ["allow-unsafe-code", "randr"] }
+
+# Graphics
+cairo-rs = { version = "0.18", features = ["png"] }
+pango = "0.18"
+pangocairo = "0.18"
+image = "0.24"
+
+# Authentication
+pam = "0.8"
+
+# Async
+tokio = { version = "1", features = ["full", "signal"] }
+
+# Configuration
+toml = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# CLI
+clap = { version = "4.0", features = ["derive"] }
+
+# Unix
+nix = { version = "0.27", features = ["user", "process", "signal"] }
+
+# Security
+zeroize = { version = "1.7", features = ["derive"] }
+
+# Keyboard
+xkbcommon = "0.8"
+
+# Utilities
+dirs = "5.0"
+users = "0.11"
