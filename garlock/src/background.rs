@@ -7,6 +7,9 @@ use image::{imageops, RgbaImage};
 
 use crate::screenshot::{rgba_to_bgra, Screenshot};
 
+/// Downsample factor for fast blur (blur at 1/N resolution)
+const BLUR_DOWNSAMPLE_FACTOR: u32 = 4;
+
 /// Processed background ready for display
 pub struct Background {
     /// Pixel data in BGRA format for X11
@@ -19,6 +22,11 @@ pub struct Background {
 
 impl Background {
     /// Create a blurred background from a screenshot
+    ///
+    /// Uses downsample-blur-upsample for fast processing:
+    /// 1. Shrink image to 1/4 size
+    /// 2. Apply blur at reduced resolution (much faster)
+    /// 3. Scale back to original size
     pub fn from_screenshot(
         screenshot: Screenshot,
         blur_radius: f32,
@@ -37,9 +45,41 @@ impl Background {
         let img = RgbaImage::from_raw(screenshot.width, screenshot.height, rgba_data)
             .context("Failed to create image from screenshot data")?;
 
-        // Apply gaussian blur
-        tracing::debug!("Applying blur (radius={})", blur_radius);
-        let blurred = imageops::blur(&img, blur_radius);
+        let original_width = screenshot.width;
+        let original_height = screenshot.height;
+
+        // Downsample for faster blur
+        let small_width = original_width / BLUR_DOWNSAMPLE_FACTOR;
+        let small_height = original_height / BLUR_DOWNSAMPLE_FACTOR;
+
+        tracing::debug!(
+            original_width,
+            original_height,
+            small_width,
+            small_height,
+            "Downsampling for fast blur"
+        );
+
+        let small_img = imageops::resize(
+            &img,
+            small_width,
+            small_height,
+            imageops::FilterType::Triangle,
+        );
+
+        // Apply blur at reduced resolution (scale radius proportionally)
+        let scaled_radius = blur_radius / BLUR_DOWNSAMPLE_FACTOR as f32;
+        tracing::debug!(scaled_radius, "Applying blur at reduced resolution");
+        let blurred_small = imageops::blur(&small_img, scaled_radius);
+
+        // Upsample back to original size
+        tracing::debug!("Upsampling to original resolution");
+        let blurred = imageops::resize(
+            &blurred_small,
+            original_width,
+            original_height,
+            imageops::FilterType::Triangle,
+        );
 
         // Apply brightness adjustment
         tracing::debug!("Applying brightness adjustment (factor={})", brightness);
@@ -51,8 +91,8 @@ impl Background {
 
         Ok(Self {
             data: bgra_data,
-            width: screenshot.width,
-            height: screenshot.height,
+            width: original_width,
+            height: original_height,
         })
     }
 
