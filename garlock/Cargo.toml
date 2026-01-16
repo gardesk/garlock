@@ -60,3 +60,4 @@ xkbcommon.workspace = true
 dirs.workspace = true
 users.workspace = true
 chrono.workspace = true
+ctrlc.workspace = true
