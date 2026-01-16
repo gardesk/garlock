@@ -286,7 +286,17 @@ fn run_lock(config: Config) -> Result<()> {
                             }
 
                             KeyResult::Enter => {
-                                if !password.is_empty() && pending_auth.is_none() {
+                                // Block attempts during cooldown
+                                if locker_state.is_in_cooldown() {
+                                    let remaining = locker_state.cooldown_remaining();
+                                    tracing::warn!(
+                                        remaining_seconds = remaining,
+                                        "Authentication blocked: cooldown active"
+                                    );
+                                    password.clear();
+                                    ring.clear_highlight();
+                                    needs_redraw = true;
+                                } else if !password.is_empty() && pending_auth.is_none() {
                                     locker_state.start_validation();
                                     ring.set_state(locker_state.ring_state());
                                     needs_redraw = true;
@@ -350,7 +360,10 @@ fn run_lock(config: Config) -> Result<()> {
                                 ring.set_state(locker_state.ring_state());
                                 needs_redraw = true;
 
-                                // TODO: Check for cooldown after max_attempts
+                                // Start cooldown after too many failures
+                                if locker_state.failed_attempts >= config.general.max_attempts {
+                                    locker_state.start_cooldown(config.general.cooldown_seconds.into());
+                                }
                             }
                         }
                         pending_auth = None;

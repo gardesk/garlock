@@ -83,6 +83,8 @@ pub struct LockerState {
     invalid_since: Option<Instant>,
     /// Number of failed authentication attempts
     pub failed_attempts: u32,
+    /// Cooldown end time (if in cooldown after too many failures)
+    cooldown_until: Option<Instant>,
 }
 
 impl LockerState {
@@ -94,6 +96,7 @@ impl LockerState {
             last_input: None,
             invalid_since: None,
             failed_attempts: 0,
+            cooldown_until: None,
         }
     }
 
@@ -125,6 +128,34 @@ impl LockerState {
         tracing::warn!(attempts = self.failed_attempts, "Authentication failed");
     }
 
+    /// Check if currently in cooldown period
+    pub fn is_in_cooldown(&self) -> bool {
+        self.cooldown_until
+            .map(|t| Instant::now() < t)
+            .unwrap_or(false)
+    }
+
+    /// Start a cooldown period after too many failed attempts
+    pub fn start_cooldown(&mut self, seconds: u64) {
+        let duration = Duration::from_secs(seconds);
+        self.cooldown_until = Some(Instant::now() + duration);
+        tracing::warn!(seconds, "Cooldown started after {} failed attempts", self.failed_attempts);
+    }
+
+    /// Get remaining cooldown time in seconds (0 if not in cooldown)
+    pub fn cooldown_remaining(&self) -> u64 {
+        self.cooldown_until
+            .map(|t| {
+                let now = Instant::now();
+                if now < t {
+                    (t - now).as_secs()
+                } else {
+                    0
+                }
+            })
+            .unwrap_or(0)
+    }
+
     /// Check and update timers, returning true if state changed
     pub fn update_timers(&mut self) -> bool {
         let mut changed = false;
@@ -149,6 +180,16 @@ impl LockerState {
                     changed = true;
                     tracing::trace!("Auth state decayed to idle");
                 }
+            }
+        }
+
+        // Check cooldown expiry
+        if let Some(until) = self.cooldown_until {
+            if Instant::now() >= until {
+                self.cooldown_until = None;
+                self.failed_attempts = 0; // Reset attempts after cooldown
+                tracing::info!("Cooldown expired, attempts reset");
+                changed = true;
             }
         }
 
