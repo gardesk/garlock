@@ -1,0 +1,56 @@
+[package]
+name = "garlock"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Screen locker for the gar desktop suite"
+
+[[bin]]
+name = "garlock"
+path = "src/main.rs"
+
+[dependencies]
+# X11
+x11rb.workspace = true
+
+# Graphics
+cairo-rs.workspace = true
+pango.workspace = true
+pangocairo.workspace = true
+image.workspace = true
+
+# Authentication
+pam.workspace = true
+
+# Async
+tokio.workspace = true
+
+# Configuration
+toml.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+# Logging
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+# Error handling
+anyhow.workspace = true
+thiserror.workspace = true
+
+# CLI
+clap.workspace = true
+
+# Unix
+nix.workspace = true
+
+# Security
+zeroize.workspace = true
+
+# Keyboard
+xkbcommon.workspace = true
+
+# Utilities
+dirs.workspace = true
+users.workspace = true
