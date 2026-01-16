@@ -10,6 +10,11 @@ description = "Screen locker for the gar desktop suite"
 name = "garlock"
 path = "src/main.rs"
 
+[features]
+default = []
+# Enable escape key to exit (for development/testing only)
+dev = []
+
 [dependencies]
 # X11
 x11rb.workspace = true
@@ -54,3 +59,4 @@ xkbcommon.workspace = true
 # Utilities
 dirs.workspace = true
 users.workspace = true
+chrono.workspace = true
