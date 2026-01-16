@@ -14,6 +14,7 @@ mod background;
 mod config;
 mod error;
 mod keyboard;
+mod overlay;
 mod password;
 mod ring;
 mod screenshot;
@@ -23,6 +24,7 @@ mod x11;
 use auth::{authenticate_async, get_current_username, AuthResult, PendingAuth};
 use background::Background;
 use config::Config;
+use overlay::{composite_overlay, OverlayRenderer};
 use keyboard::{KeyResult, Keyboard};
 use password::Password;
 use ring::{composite_ring, RingRenderer};
@@ -153,6 +155,9 @@ fn run_lock(config: Config) -> Result<()> {
     tracing::info!("Initializing ring indicator...");
     let mut ring = RingRenderer::from_config(&config.ring);
 
+    // Step 7: Initialize overlay renderer for text elements
+    let overlay = OverlayRenderer::new(&config.font);
+
     // Get ring center position (center of primary monitor, or screen center)
     let (ring_cx, ring_cy) = match locker.get_monitors() {
         Ok(monitors) => {
@@ -175,13 +180,24 @@ fn run_lock(config: Config) -> Result<()> {
         }
     };
 
-    // Helper to composite ring onto background and display
+    /// Overlay positioning offset from ring center
+    const OVERLAY_TIME_OFFSET_Y: i32 = -150; // Above ring
+    const OVERLAY_CAPS_OFFSET_Y: i32 = 130;  // Below ring
+    const OVERLAY_ATTEMPTS_OFFSET_Y: i32 = 160; // Below caps lock
+    const OVERLAY_COOLDOWN_OFFSET_Y: i32 = 190; // Below attempts
+
+    // Helper to composite ring and overlays onto background and display
     let render_frame = |background: &mut Background,
                         background_clean: &[u8],
                         ring: &RingRenderer,
+                        overlay: &OverlayRenderer,
                         locker: &LockerWindow,
+                        config: &Config,
                         ring_cx: i32,
-                        ring_cy: i32|
+                        ring_cy: i32,
+                        caps_lock_active: bool,
+                        failed_attempts: u32,
+                        cooldown_secs: u64|
      -> Result<()> {
         // Reset background to clean state
         background.data.copy_from_slice(background_clean);
@@ -206,6 +222,78 @@ fn run_lock(config: Config) -> Result<()> {
             dest_y,
         );
 
+        // Render and composite time display (above ring)
+        if let Some(result) = overlay.render_time(&config.indicator) {
+            let mut time_surface = result?;
+            let time_data = time_surface.to_bgra()?;
+            let time_x = ring_cx - time_surface.width / 2;
+            let time_y = ring_cy + OVERLAY_TIME_OFFSET_Y - time_surface.height / 2;
+            composite_overlay(
+                &mut background.data,
+                background.width,
+                background.height,
+                &time_data,
+                time_surface.width,
+                time_surface.height,
+                time_x,
+                time_y,
+            );
+        }
+
+        // Render and composite caps lock indicator (below ring)
+        if let Some(result) = overlay.render_caps_lock(&config.indicator, caps_lock_active) {
+            let mut caps_surface = result?;
+            let caps_data = caps_surface.to_bgra()?;
+            let caps_x = ring_cx - caps_surface.width / 2;
+            let caps_y = ring_cy + OVERLAY_CAPS_OFFSET_Y - caps_surface.height / 2;
+            composite_overlay(
+                &mut background.data,
+                background.width,
+                background.height,
+                &caps_data,
+                caps_surface.width,
+                caps_surface.height,
+                caps_x,
+                caps_y,
+            );
+        }
+
+        // Render and composite failed attempts indicator
+        if let Some(result) = overlay.render_failed_attempts(&config.indicator, failed_attempts) {
+            let mut attempts_surface = result?;
+            let attempts_data = attempts_surface.to_bgra()?;
+            let attempts_x = ring_cx - attempts_surface.width / 2;
+            let attempts_y = ring_cy + OVERLAY_ATTEMPTS_OFFSET_Y - attempts_surface.height / 2;
+            composite_overlay(
+                &mut background.data,
+                background.width,
+                background.height,
+                &attempts_data,
+                attempts_surface.width,
+                attempts_surface.height,
+                attempts_x,
+                attempts_y,
+            );
+        }
+
+        // Render and composite cooldown timer
+        if let Some(result) = overlay.render_cooldown(cooldown_secs) {
+            let mut cooldown_surface = result?;
+            let cooldown_data = cooldown_surface.to_bgra()?;
+            let cooldown_x = ring_cx - cooldown_surface.width / 2;
+            let cooldown_y = ring_cy + OVERLAY_COOLDOWN_OFFSET_Y - cooldown_surface.height / 2;
+            composite_overlay(
+                &mut background.data,
+                background.width,
+                background.height,
+                &cooldown_data,
+                cooldown_surface.width,
+                cooldown_surface.height,
+                cooldown_x,
+                cooldown_y,
+            );
+        }
+
         locker.put_image(&background.data)?;
         Ok(())
     };
@@ -215,9 +303,14 @@ fn run_lock(config: Config) -> Result<()> {
         &mut background,
         &background_clean,
         &ring,
+        &overlay,
         &locker,
+        &config,
         ring_cx,
         ring_cy,
+        keyboard.caps_lock_active(),
+        locker_state.failed_attempts,
+        locker_state.cooldown_remaining(),
     )?;
 
     // Get current username for PAM authentication
@@ -227,9 +320,16 @@ fn run_lock(config: Config) -> Result<()> {
     // Track pending authentication
     let mut pending_auth: Option<PendingAuth> = None;
 
-    tracing::info!("Entering event loop (press Escape to exit - dev mode only)");
+    #[cfg(feature = "dev")]
+    tracing::info!("Entering event loop (dev mode: press Escape to exit)");
+    #[cfg(not(feature = "dev"))]
+    tracing::info!("Entering event loop");
 
     let mut needs_redraw = false;
+
+    // Timer for periodic time display updates (every second if time is shown)
+    let mut last_time_update = std::time::Instant::now();
+    let time_update_interval = std::time::Duration::from_secs(1);
 
     loop {
         // Process events
@@ -244,9 +344,15 @@ fn run_lock(config: Config) -> Result<()> {
                         let key_result = keyboard.process_key(keycode, true);
 
                         match key_result {
+                            #[cfg(feature = "dev")]
                             KeyResult::Escape => {
                                 tracing::info!("Escape pressed, exiting (dev mode)");
                                 break;
+                            }
+
+                            #[cfg(not(feature = "dev"))]
+                            KeyResult::Escape => {
+                                // In production, escape does nothing
                             }
 
                             KeyResult::Char(c) => {
@@ -375,6 +481,12 @@ fn run_lock(config: Config) -> Result<()> {
                     needs_redraw = true;
                 }
 
+                // Periodic time display update (if enabled)
+                if config.indicator.show_time && last_time_update.elapsed() >= time_update_interval {
+                    last_time_update = std::time::Instant::now();
+                    needs_redraw = true;
+                }
+
                 if needs_redraw {
                     // Update ring state from locker state
                     ring.set_state(locker_state.ring_state());
@@ -383,9 +495,14 @@ fn run_lock(config: Config) -> Result<()> {
                         &mut background,
                         &background_clean,
                         &ring,
+                        &overlay,
                         &locker,
+                        &config,
                         ring_cx,
                         ring_cy,
+                        keyboard.caps_lock_active(),
+                        locker_state.failed_attempts,
+                        locker_state.cooldown_remaining(),
                     )?;
                     needs_redraw = false;
                 }
