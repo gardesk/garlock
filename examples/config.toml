@@ -1,0 +1,85 @@
+# garlock configuration
+# Screen locker for the gar desktop suite
+#
+# This file is auto-generated with default values.
+# Uncomment and modify options as needed.
+
+[general]
+# Grace period in seconds before password is required (0 to disable)
+grace_period = 0
+
+# PAM service name (must have corresponding /etc/pam.d/garlock file)
+pam_service = "garlock"
+
+# Maximum failed attempts before cooldown kicks in
+max_attempts = 3
+
+# Cooldown duration in seconds (multiplied by attempts over max)
+cooldown_seconds = 5
+
+[background]
+# Gaussian blur radius (higher = more blur, 0 to disable)
+blur_radius = 25.0
+
+# Brightness adjustment (0.0 = black, 1.0 = original brightness)
+brightness = 0.6
+
+# Fallback solid color if screenshot capture fails (hex format)
+fallback_color = "#1a1a2e"
+
+[ring]
+# Ring geometry
+radius_outer = 90.0
+radius_inner = 75.0
+line_width = 6.0
+
+# State colors (hex format with optional alpha: #RRGGBB or #RRGGBBAA)
+# Idle: waiting for input
+color_idle = "#1e90ffcc"
+
+# Typing: receiving password input
+color_typing = "#00ff00cc"
+
+# Verifying: checking password with PAM
+color_verifying = "#ffa500cc"
+
+# Wrong: authentication failed
+color_wrong = "#ff0000cc"
+
+# Clear: backspace pressed / clearing input
+color_clear = "#ffff00cc"
+
+# Inner circle fill color
+color_inside = "#00000088"
+
+# Ring track background color
+color_ring_bg = "#00000055"
+
+[indicator]
+# Show Caps Lock warning when active
+show_caps_lock = true
+caps_lock_text = "Caps Lock"
+
+# Show number of failed attempts
+show_failed_attempts = true
+
+# Show current time on lock screen
+show_time = true
+
+# Time format (strftime patterns)
+# Common formats:
+#   "%H:%M"     - 24-hour (14:30)
+#   "%H:%M:%S"  - 24-hour with seconds (14:30:45)
+#   "%I:%M %p"  - 12-hour with AM/PM (02:30 PM)
+#   "%I:%M:%S %p" - 12-hour with seconds (02:30:45 PM)
+#   "%l:%M %p"  - 12-hour no leading zero (2:30 PM)
+#   "%a %H:%M"  - Day + time (Mon 14:30)
+#   "%A, %B %d" - Full date (Monday, January 16)
+time_format = "%H:%M:%S"
+
+[font]
+# Font family for text elements
+family = "Sans"
+
+# Font size in points
+size = 14
