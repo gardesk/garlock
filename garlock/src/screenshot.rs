@@ -65,6 +65,24 @@ impl Screenshot {
             );
         }
 
+        // Check if screenshot is mostly black (compositor might not be exposing root window)
+        let non_black_pixels = Self::count_non_black_pixels(&reply.data);
+        let total_pixels = (width as usize * height as usize) as f64;
+        let non_black_ratio = non_black_pixels as f64 / total_pixels;
+
+        if non_black_ratio < 0.01 {
+            tracing::warn!(
+                "Screenshot appears to be mostly black ({:.2}% non-black pixels). \
+                 This may indicate compositor is not exposing root window contents.",
+                non_black_ratio * 100.0
+            );
+        } else {
+            tracing::debug!(
+                "Screenshot content check: {:.1}% non-black pixels",
+                non_black_ratio * 100.0
+            );
+        }
+
         Ok(Self {
             data: reply.data,
             width: width as u32,
@@ -78,6 +96,20 @@ impl Screenshot {
         let mut rgba = self.data.clone();
         bgra_to_rgba(&mut rgba);
         rgba
+    }
+
+    /// Count pixels that are not pure black (for detecting empty screenshots)
+    fn count_non_black_pixels(data: &[u8]) -> usize {
+        let mut count = 0;
+        // Sample every 100th pixel for performance
+        for chunk in data.chunks_exact(4).step_by(100) {
+            // BGRA format - check if any color channel is non-zero
+            if chunk[0] > 5 || chunk[1] > 5 || chunk[2] > 5 {
+                count += 1;
+            }
+        }
+        // Extrapolate to total
+        count * 100
     }
 }
 

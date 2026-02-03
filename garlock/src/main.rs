@@ -8,6 +8,7 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 use x11rb::connection::Connection;
+use x11rb::wrapper::ConnectionExt as WrapperConnectionExt;
 
 mod auth;
 mod background;
@@ -207,10 +208,12 @@ fn run_lock(config: Config) -> Result<()> {
     tracing::info!("Capturing screenshot...");
     let mut background = match Screenshot::capture() {
         Ok(screenshot) => {
-            tracing::debug!(
+            tracing::info!(
                 width = screenshot.width,
                 height = screenshot.height,
-                "Screenshot captured, applying blur"
+                depth = screenshot.depth,
+                data_len = screenshot.data.len(),
+                "Screenshot captured successfully"
             );
 
             // Process with blur and brightness from config
@@ -219,9 +222,17 @@ fn run_lock(config: Config) -> Result<()> {
                 config.background.blur_radius,
                 config.background.brightness,
             ) {
-                Ok(bg) => bg,
+                Ok(bg) => {
+                    tracing::info!(
+                        bg_width = bg.width,
+                        bg_height = bg.height,
+                        bg_data_len = bg.data.len(),
+                        "Background processed successfully"
+                    );
+                    bg
+                }
                 Err(e) => {
-                    tracing::warn!("Failed to process screenshot: {}, using fallback", e);
+                    tracing::error!("Failed to process screenshot: {}, using fallback", e);
                     let (conn, screen_num) = x11rb::connect(None)?;
                     let screen = &conn.setup().roots[screen_num];
                     Background::solid_color(
@@ -233,7 +244,7 @@ fn run_lock(config: Config) -> Result<()> {
             }
         }
         Err(e) => {
-            tracing::warn!("Failed to capture screenshot: {}, using fallback", e);
+            tracing::error!("Failed to capture screenshot: {}, using fallback", e);
             let (conn, screen_num) = x11rb::connect(None)?;
             let screen = &conn.setup().roots[screen_num];
             Background::solid_color(
@@ -244,14 +255,40 @@ fn run_lock(config: Config) -> Result<()> {
         }
     };
 
+    // Step 2: Create fullscreen locker window with input grabs
+    tracing::info!("Creating locker window...");
+    let locker = LockerWindow::new()?;
+
+    // Check for size mismatch between background and window
+    let win_width = locker.width() as u32;
+    let win_height = locker.height() as u32;
+    let win_depth = locker.depth();
+
+    tracing::info!(
+        win_width,
+        win_height,
+        win_depth,
+        bg_width = background.width,
+        bg_height = background.height,
+        "Window created, checking dimensions"
+    );
+
+    // Resize background if dimensions don't match
+    if background.width != win_width || background.height != win_height {
+        tracing::warn!(
+            "Size mismatch! Background {}x{} vs Window {}x{}. Using solid fallback.",
+            background.width,
+            background.height,
+            win_width,
+            win_height
+        );
+        background = Background::solid_color(win_width, win_height, &config.background.fallback_color);
+    }
+
     // Keep a clean copy of the background for re-compositing
     let background_clean = background.data.clone();
     let bg_width = background.width;
     let bg_height = background.height;
-
-    // Step 2: Create fullscreen locker window with input grabs
-    tracing::info!("Creating locker window...");
-    let locker = LockerWindow::new()?;
 
     // Step 3: Initialize keyboard handler with XKB
     tracing::info!("Initializing keyboard handler...");
@@ -410,8 +447,9 @@ fn run_lock(config: Config) -> Result<()> {
         Ok(())
     };
 
-    // Initial render
-    render_frame(
+    // Initial render - CRITICAL: must complete before event loop
+    tracing::info!("Performing initial render...");
+    match render_frame(
         &mut background,
         &background_clean,
         &ring,
@@ -423,7 +461,17 @@ fn run_lock(config: Config) -> Result<()> {
         keyboard.caps_lock_active(),
         locker_state.failed_attempts,
         locker_state.cooldown_remaining(),
-    )?;
+    ) {
+        Ok(()) => tracing::info!("Initial render completed successfully"),
+        Err(e) => {
+            tracing::error!("Initial render failed: {}", e);
+            return Err(e);
+        }
+    }
+
+    // Sync to ensure the image is displayed before continuing
+    locker.conn().sync()?;
+    tracing::debug!("X11 sync completed");
 
     // Get current username for PAM authentication
     let username = get_current_username()?;

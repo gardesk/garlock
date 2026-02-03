@@ -12,7 +12,7 @@ repository = "https://github.com/mfwolffe/gardesk"
 
 [workspace.dependencies]
 # X11
-x11rb = { version = "0.13", features = ["allow-unsafe-code", "randr"] }
+x11rb = { version = "0.13", features = ["allow-unsafe-code", "randr", "composite"] }
 
 # Graphics
 cairo-rs = { version = "0.18", features = ["png"] }
