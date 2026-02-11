@@ -67,7 +67,12 @@ pub fn authenticate_async(username: String, password: String) -> PendingAuth {
 ///
 /// This should be called from a background thread to avoid blocking the UI.
 fn authenticate_blocking(username: &str, password: &str) -> AuthResult {
-    tracing::debug!(%username, "Starting PAM authentication");
+    tracing::info!(
+        %username,
+        pw_bytes = password.len(),
+        pw_chars = password.chars().count(),
+        "Starting PAM authentication"
+    );
 
     match pam_authenticate(username, password) {
         Ok(()) => {

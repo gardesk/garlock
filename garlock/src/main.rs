@@ -68,15 +68,29 @@ enum Commands {
 fn main() -> Result<()> {
     let args = Args::parse();
 
-    // Initialize logging
+    // Initialize logging (stderr + file at /tmp/garlock.log)
     let log_level = if args.debug { "debug" } else { "info" };
-    tracing_subscriber::registry()
-        .with(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new(log_level)),
-        )
-        .with(tracing_subscriber::fmt::layer())
-        .init();
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new(log_level));
+    let registry = tracing_subscriber::registry().with(filter);
+
+    if let Ok(log_file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/garlock.log")
+    {
+        let file_layer = tracing_subscriber::fmt::layer()
+            .with_writer(std::sync::Mutex::new(log_file))
+            .with_ansi(false);
+        registry
+            .with(tracing_subscriber::fmt::layer())
+            .with(file_layer)
+            .init();
+    } else {
+        registry
+            .with(tracing_subscriber::fmt::layer())
+            .init();
+    }
 
     tracing::info!("garlock {} starting", env!("CARGO_PKG_VERSION"));
     tracing::debug!(?args, "Command line arguments");
@@ -498,10 +512,11 @@ fn run_lock(config: Config) -> Result<()> {
                 match event {
                     x11rb::protocol::Event::KeyPress(key_event) => {
                         let keycode = key_event.detail;
-                        tracing::debug!(keycode, "Key press");
+                        tracing::info!(keycode, event_window = key_event.event, "Key press");
 
                         // Process key through XKB
                         let key_result = keyboard.process_key(keycode, true);
+                        tracing::info!(?key_result, "XKB key result");
 
                         match key_result {
                             #[cfg(feature = "dev")]
@@ -552,6 +567,14 @@ fn run_lock(config: Config) -> Result<()> {
                             }
 
                             KeyResult::Enter => {
+                                tracing::info!(
+                                    pw_empty = password.is_empty(),
+                                    pw_chars = password.char_count(),
+                                    pw_bytes = password.len(),
+                                    auth_pending = pending_auth.is_some(),
+                                    in_cooldown = locker_state.is_in_cooldown(),
+                                    "Enter pressed"
+                                );
                                 // Block attempts during cooldown
                                 if locker_state.is_in_cooldown() {
                                     let remaining = locker_state.cooldown_remaining();
@@ -568,6 +591,7 @@ fn run_lock(config: Config) -> Result<()> {
                                     needs_redraw = true;
                                     tracing::info!(
                                         chars = password.char_count(),
+                                        bytes = password.len(),
                                         "Starting PAM authentication"
                                     );
 
@@ -578,6 +602,12 @@ fn run_lock(config: Config) -> Result<()> {
                                     ));
                                     password.clear();
                                     ring.clear_highlight();
+                                } else {
+                                    tracing::warn!(
+                                        "Enter ignored: pw_empty={} auth_pending={}",
+                                        password.is_empty(),
+                                        pending_auth.is_some()
+                                    );
                                 }
                             }
 
@@ -600,13 +630,21 @@ fn run_lock(config: Config) -> Result<()> {
                         keyboard.process_key(key_event.detail, false);
                     }
 
-                    x11rb::protocol::Event::Expose(_) => {
-                        tracing::trace!("Expose event");
+                    x11rb::protocol::Event::Expose(e) => {
+                        tracing::info!(x = e.x, y = e.y, w = e.width, h = e.height, "Expose event");
                         needs_redraw = true;
                     }
 
+                    x11rb::protocol::Event::FocusIn(e) => {
+                        tracing::info!(?e.mode, ?e.detail, "FocusIn");
+                    }
+
+                    x11rb::protocol::Event::FocusOut(e) => {
+                        tracing::warn!(?e.mode, ?e.detail, "FocusOut - may lose keyboard!");
+                    }
+
                     _ => {
-                        tracing::trace!(?event, "Unhandled event");
+                        tracing::debug!(?event, "Unhandled event");
                     }
                 }
             }

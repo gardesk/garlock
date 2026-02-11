@@ -85,7 +85,8 @@ impl LockerWindow {
                         | EventMask::BUTTON_PRESS
                         | EventMask::BUTTON_RELEASE
                         | EventMask::POINTER_MOTION
-                        | EventMask::STRUCTURE_NOTIFY,
+                        | EventMask::STRUCTURE_NOTIFY
+                        | EventMask::FOCUS_CHANGE,
                 ),
         )
         .context("Failed to create window")?;
@@ -251,11 +252,11 @@ impl LockerWindow {
 
             match reply.status {
                 GrabStatus::SUCCESS => {
-                    tracing::debug!(attempt, "Keyboard grab successful");
+                    tracing::info!(attempt, "Keyboard grab successful");
                     return Ok(());
                 }
                 status => {
-                    tracing::trace!(?status, attempt, "Keyboard grab failed, retrying");
+                    tracing::warn!(?status, attempt, "Keyboard grab failed, retrying");
                     std::thread::sleep(RETRY_DELAY);
                 }
             }
